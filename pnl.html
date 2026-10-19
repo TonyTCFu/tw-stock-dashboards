@@ -238,7 +238,7 @@
 
       <div class="refresh-row">
         <button type="button" class="refresh-btn" id="refreshBtn">↻ 更新最新行情</button>
-        <span class="refresh-status" id="refreshStatus" role="status" aria-live="polite">目前顯示 2026-10-19 收盤價；按「更新」向證交所即時行情與龍頭股看板雙來源核對後重算。</span>
+        <span class="refresh-status" id="refreshStatus" role="status" aria-live="polite">目前顯示 2026-10-19 收盤價；按「更新」向證交所即時行情核對後重算（行情數字只採證交所官方，不採用龍頭股看板數據）。</span>
       </div>
 
       <div class="kpis" id="kpis"></div>
@@ -305,7 +305,7 @@
           <li><strong>對帳軋平：</strong>本表 11 筆合計總價金 NT$294,335、總手續費 NT$248、總交易稅 NT$0，與券商對帳單總計<strong>完全一致</strong>。其中台光電 1 股（2026/10/12 買進）為後補截圖確認後補入。</li>
           <li><strong>成本口徑：</strong>持有成本＝價金＋買進手續費，與券商對帳單「持有成本」欄一致；交易稅為 0（買進不課證交稅）。</li>
           <li><strong>賣出成本估算：</strong>切換至「估算賣出後淨額」時，賣出手續費以法定費率 0.1425% 估算、證交稅以 0.3% 估算，未計券商折讓與零股最低手續費，實際金額以成交為準。</li>
-          <li><strong>價格基準：</strong>頁面開啟時顯示 2026-10-19 收盤價（台積電 2,420、鴻海 239.5、川湖 9,920、台光電 5,125、健策 6,560、台達電 1,640）。按上方「更新最新行情」按鈕後，頁面會同時向<strong>證交所即時行情（mis.twse.com.tw）</strong>與<strong>台股龍頭股看板行情源</strong>抓取最新價，<strong>兩來源一致才採用</strong>並重算損益；不一致或只有單一來源有價的股票維持原價，並在按鈕旁註明。開盤時段（09:00–13:30）每小時亦由系統排程刷新一次。</li>
+          <li><strong>價格基準：</strong>頁面開啟時顯示 2026-10-19 收盤價（台積電 2,420、鴻海 239.5、川湖 9,920、台光電 5,125、健策 6,560、台達電 1,640）。按上方「更新最新行情」按鈕後，頁面只向<strong>證交所即時行情（mis.twse.com.tw）</strong>抓取最新價並重算損益；<strong>行情數字只採證交所官方，不採用龍頭股看板數據</strong>。證交所未回傳行情的股票維持原價，並在按鈕旁註明。開盤時段（09:00–13:30）每小時亦由系統排程刷新一次。</li>
         </ul>
       </div>
 
@@ -346,7 +346,7 @@
 
       // ── Price-basis state (baked 2026-10-19 snapshot until a verified live refresh) ──
       var priceDate = "2026-10-19"; // ISO date of the prices currently shown
-      var priceIsLive = false;      // true after a two-source verified refresh
+      var priceIsLive = false;      // true after a live MIS refresh
       var CODES = ORDER.slice();
       function pad2(n) { return (n < 10 ? "0" : "") + n; }
       function mdLabel(iso) { var p = iso.split("-"); return (+p[1]) + "/" + (+p[2]); }
@@ -515,11 +515,7 @@
       document.getElementById("modeGross").addEventListener("click", function () { setMode("gross"); });
       document.getElementById("modeNet").addEventListener("click", function () { setMode("net"); });
 
-      // ── 更新按鈕：雙來源核對（證交所 MIS × 龍頭股看板），兩來源一致才採用 ──
-      var BOARD_URLS = [
-        "https://futienchun-com-dashboard.onrender.com/api/live-quotes",
-        "https://futienchun-dashboard.onrender.com/api/live-quotes"
-      ];
+      // ── 更新按鈕：行情只以證交所即時行情（MIS）為準，不採用龍頭股看板數據 ──
       var refreshing = false;
 
       function fetchWithTimeout(url, opts, ms) {
@@ -534,7 +530,7 @@
         }, function (e) { if (timer) clearTimeout(timer); throw e; });
       }
 
-      // Source 1: TWSE MIS real-time quotes (mis.twse.com.tw)
+      // TWSE MIS real-time quotes (mis.twse.com.tw) — the only price source
       function fetchMis() {
         var ch = CODES.map(function (c) { return "tse_" + c + ".tw"; }).join("|");
         var url = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=" +
@@ -556,64 +552,6 @@
         });
       }
 
-      // Source 2: successor board's live-quotes API (the 龍頭股看板 data source)
-      function numVal(v) {
-        var n = (typeof v === "string") ? parseFloat(v.replace(/,/g, "")) : v;
-        return (typeof n === "number" && isFinite(n) && n > 0) ? n : null;
-      }
-      var BOARD_PRICE_KEYS = ["last_price", "price", "close", "last", "current_price", "close_price", "z"];
-      function boardEntryPrice(e) {
-        for (var i = 0; i < BOARD_PRICE_KEYS.length; i++) {
-          var n = numVal(e[BOARD_PRICE_KEYS[i]]);
-          if (n) return n;
-        }
-        return null;
-      }
-      function extractBoard(data) {
-        var out = {};
-        function take(code, entry) {
-          if (CODES.indexOf(code) >= 0 && !out[code]) {
-            var p = boardEntryPrice(entry);
-            if (p) out[code] = p;
-          }
-        }
-        if (data && Array.isArray(data.stocks)) {
-          data.stocks.forEach(function (s) {
-            if (!s || typeof s !== "object") return;
-            var code = s.code || s.symbol;
-            if (typeof code === "string") take(code.replace(/\.TW$/i, ""), s);
-          });
-        }
-        if (Object.keys(out).length < CODES.length) { // fallback: tolerant deep search
-          var budget = 80000;
-          (function visit(node, depth) {
-            if (!node || typeof node !== "object" || depth > 6 || budget-- <= 0) return;
-            if (Array.isArray(node)) { node.forEach(function (n) { visit(n, depth + 1); }); return; }
-            var cf = node.code || node.symbol || node.stock_id;
-            if (typeof cf === "string") take(cf.replace(/\.TW$/i, ""), node);
-            Object.keys(node).forEach(function (k) { visit(node[k], depth + 1); });
-          })(data, 0);
-        }
-        if (!Object.keys(out).length) throw new Error("Board: no usable quotes");
-        return out;
-      }
-      function fetchBoardFrom(idx) {
-        if (idx >= BOARD_URLS.length) return Promise.reject(new Error("Board: all endpoints failed"));
-        return fetchWithTimeout(BOARD_URLS[idx], {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ symbols: CODES })
-        }, 40000).then(function (r) {
-          if (!r.ok) throw new Error("Board HTTP " + r.status);
-          return r.json();
-        }).then(extractBoard).catch(function () { return fetchBoardFrom(idx + 1); });
-      }
-
-      function settle(p) {
-        return p.then(function (v) { return { ok: true, v: v }; },
-                      function () { return { ok: false, v: null }; });
-      }
-
       function refreshQuotes() {
         if (refreshing) return;
         refreshing = true;
@@ -622,66 +560,55 @@
         btn.disabled = true;
         btn.textContent = "更新中…";
         status.className = "refresh-status";
-        status.textContent = "正在抓取證交所即時行情（MIS）與龍頭股看板行情，雙來源交叉核對中…";
-        Promise.all([settle(fetchMis()), settle(fetchBoardFrom(0))]).then(function (res) {
-          finishRefresh(res[0].ok ? res[0].v : null, res[1].ok ? res[1].v : null, res[0].ok, res[1].ok);
+        status.textContent = "正在向證交所即時行情（MIS）抓取最新價…";
+        fetchMis().then(function (mis) {
+          finishRefresh(mis);
+        }, function () {
+          finishRefresh(null);
+        }).then(function () {
           refreshing = false;
           btn.disabled = false;
           btn.textContent = "↻ 更新最新行情";
         });
       }
 
-      function finishRefresh(mis, board, misOk, boardOk) {
+      function finishRefresh(mis) {
         var status = document.getElementById("refreshStatus");
         var now = new Date();
         var timeStr = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
-        if (!mis && !board) {
+        if (!mis) {
           status.className = "refresh-status warn";
-          status.textContent = "更新失敗（" + timeStr + "）：證交所 MIS 與龍頭股看板兩個來源都連不上（可能遭瀏覽器跨域政策或來源限流阻擋），未更動任何數字，目前仍顯示 " +
+          status.textContent = "更新失敗（" + timeStr + "）：證交所即時行情（MIS）連不上（可能遭瀏覽器跨域政策阻擋），未更動任何數字，目前仍顯示 " +
             priceDate + " " + priceWord() + "。請稍後再按一次，或以券商 App 行情為準。";
           return;
         }
-        var applied = [], conflicts = [], singleOnly = [];
+        var applied = [], missing = [];
         CODES.forEach(function (code) {
-          var m = (mis && mis[code]) ? mis[code].price : null;
-          var b = (board && board[code] != null) ? board[code] : null;
-          if (m != null && b != null) {
-            if (Math.abs(m - b) <= 0.01) { // 兩來源一致才採用
-              QUOTES[code].close = m;
-              if (mis[code].prev) QUOTES[code].prev = mis[code].prev;
-              if (mis[code].date) priceDate = mis[code].date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3");
-              applied.push(code);
-            } else {
-              conflicts.push(QUOTES[code].name + " " + code + "（MIS " + fmtPrice(m) + "／看板 " + fmtPrice(b) + "）");
-            }
-          } else if (m != null || b != null) {
-            singleOnly.push(QUOTES[code].name + " " + code);
+          var m = mis[code];
+          if (m) {
+            QUOTES[code].close = m.price;
+            if (m.prev) QUOTES[code].prev = m.prev;
+            if (m.date) priceDate = m.date.replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3");
+            applied.push(code);
+          } else {
+            missing.push(QUOTES[code].name + " " + code);
           }
         });
         var msg, warn = false;
         if (applied.length) {
           priceIsLive = true;
           document.getElementById("asofSrc").textContent =
-            "雙來源核對通過後更新：" + timeStr + "（證交所 MIS × 龍頭股看板）";
+            "已更新：" + timeStr + "（證交所 MIS 即時行情）";
           render();
         }
-        if (applied.length === CODES.length && !conflicts.length && !singleOnly.length) {
-          msg = "已更新 ✓ " + timeStr + "：6 檔皆經證交所 MIS 與龍頭股看板雙來源核對一致，損益已以最新價重算。";
+        if (applied.length === CODES.length) {
+          msg = "已更新 ✓ " + timeStr + "：6 檔皆以證交所即時行情（MIS）最新價重算損益。";
         } else if (applied.length) {
           warn = true;
-          msg = "已更新 " + applied.length + " 檔（" + timeStr + "，雙來源一致）。";
-          if (conflicts.length) msg += "下列各股兩來源不一致，未採用、維持原價：" + conflicts.join("、") + "。";
-          if (singleOnly.length) msg += "下列各股僅單一來源有價，未採用：" + singleOnly.join("、") + "。";
+          msg = "已更新 " + applied.length + " 檔（" + timeStr + "，證交所 MIS）。下列各股證交所未回傳行情，維持原價：" + missing.join("、") + "。";
         } else {
           warn = true;
-          if (conflicts.length) {
-            msg = "未更新（" + timeStr + "）：兩來源價格不一致，未採用任何新價：" + conflicts.join("、") +
-              "。目前仍顯示 " + priceDate + " " + priceWord() + "。";
-          } else {
-            msg = "未更新（" + timeStr + "）：僅取得單一來源行情（" + (misOk ? "證交所 MIS" : "龍頭股看板") +
-              (misOk ? "；龍頭股看板來源未回應" : "；證交所 MIS 未回應") +
-              "），依雙來源核對原則不採用，目前仍顯示 " + priceDate + " " + priceWord() + "。";
-          }
+          msg = "未更新（" + timeStr + "）：證交所即時行情（MIS）未回傳任何持股行情，目前仍顯示 " + priceDate + " " + priceWord() + "。";
         }
         status.className = "refresh-status " + (warn ? "warn" : "ok");
         status.textContent = msg;
