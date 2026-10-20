@@ -78,7 +78,7 @@
 
       /* ── KPI band ─────────────────────────── */
       .kpis {
-        display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px;
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px;
       }
       .kpi {
         background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
@@ -267,6 +267,7 @@
                 <th scope="col">市值</th>
                 <th scope="col" id="thPnl">未實現損益</th>
                 <th scope="col">報酬率</th>
+                <th scope="col">股息收入</th>
                 <th scope="col">成本佔比</th>
               </tr>
             </thead>
@@ -304,6 +305,7 @@
         <ul>
           <li><strong>對帳軋平：</strong>本表 11 筆合計總價金 NT$294,335、總手續費 NT$248、總交易稅 NT$0，與券商對帳單總計<strong>完全一致</strong>。其中台光電 1 股（2026/10/12 買進）為後補截圖確認後補入。</li>
           <li><strong>成本口徑：</strong>持有成本＝價金＋買進手續費，與券商對帳單「持有成本」欄一致；交易稅為 0（買進不課證交稅）。</li>
+          <li><strong>股息口徑：</strong>股息為 Tony 券商實際入帳金額（台積電 560 元、除息日 2026/09/16；川湖 102 元、除息日 2026/08/27，僅除息日前持有的 2 股參與），累計現金股利 NT$662、股票股利 0 股；僅 Tony 提供新截圖才更新，行情刷新不會更動股息數字。「含息總損益」＝未實現損益＋累計現金股利。</li>
           <li><strong>賣出成本估算：</strong>切換至「估算賣出後淨額」時，賣出手續費以法定費率 0.1425% 估算、證交稅以 0.3% 估算，未計券商折讓與零股最低手續費，實際金額以成交為準。</li>
           <li><strong>價格基準：</strong>頁面開啟時顯示 2026-10-19 收盤價（台積電 2,420、鴻海 239.5、川湖 9,920、台光電 5,125、健策 6,560、台達電 1,640）。按上方「更新最新行情」按鈕後，頁面只向<strong>證交所即時行情（mis.twse.com.tw）</strong>抓取最新價並重算損益；<strong>行情數字只採證交所官方，不採用龍頭股看板數據</strong>。證交所未回傳行情的股票維持原價，並在按鈕旁註明。開盤時段（09:00–13:30）每小時亦由系統排程刷新一次。</li>
         </ul>
@@ -340,6 +342,14 @@
         { date: "2026-10-12", code: "2059", price: 10605, shares: 1,   amount: 10605, fee: 9,  cost: 10614 },
         { date: "2026-10-12", code: "2383", price: 5995,  shares: 1,   amount: 5995,  fee: 5,  cost: 6000 }
       ];
+      // ── Data: dividends actually received (Tony's broker records) ──
+      // Static by design: price refreshes never touch these. Only updated
+      // when Tony provides a new broker screenshot.
+      var DIVIDENDS = {
+        "2330": { cash: 560, exDate: "2026-09-16" }, // 80 股參與除息
+        "2059": { cash: 102, exDate: "2026-08-27" }  // 2 股參與；10/12 加碼 1 股在除息日後，不參與
+      };
+      var TOTAL_CASH_DIV = 662; // 累計現金股利；股票股利 0 股
       var ORDER = ["2330", "2317", "2059", "2383", "3653", "2308"]; // by cost weight, desc
       var FEE_RATE = 0.001425, TAX_RATE = 0.003;
       var mode = "gross"; // "gross" | "net"
@@ -426,7 +436,10 @@
           { label: net ? "未實現損益（估算淨額）" : "未實現損益", value: fmtSigned(t.pnl), unit: true,
             sub: "報酬率 " + fmtPct(t.pnl / t.cost, true), cls: cls(t.pnl), hero: true },
           { label: "總報酬率", value: fmtPct(t.pnl / t.cost, true), unit: false, sub: net ? "已扣預估賣出成本" : "未扣賣出成本", cls: cls(t.pnl), hero: false },
-          { label: "本日損益（" + mdLabel(priceDate) + "）", value: fmtSigned(t.day), unit: true, sub: "市值單日變動", cls: cls(t.day), hero: false }
+          { label: "本日損益（" + mdLabel(priceDate) + "）", value: fmtSigned(t.day), unit: true, sub: "市值單日變動", cls: cls(t.day), hero: false },
+          { label: "累計股息收入", value: fmt(TOTAL_CASH_DIV), unit: true, sub: "現金股利 · 股票股利 0 股", hero: false },
+          { label: "含息總損益", value: fmtSigned(t.pnl + TOTAL_CASH_DIV), unit: true,
+            sub: "含息報酬率 " + fmtPct((t.pnl + TOTAL_CASH_DIV) / t.cost, true), cls: cls(t.pnl + TOTAL_CASH_DIV), hero: false }
         ];
         if (net) items[1].sub = "預估賣出成本 " + fmt(t.sell) + "（手續費 " + fmt(t.fee) + " ＋ 證交稅 " + fmt(t.tax) + "）";
         document.getElementById("kpis").innerHTML = items.map(function (it) {
@@ -435,6 +448,12 @@
             '<div class="value mono ' + (it.cls || "") + '">' + (it.unit ? '<span class="unit">NT$</span>' : "") + it.value + '</div>' +
             '<div class="delta ' + (it.cls || "") + '">' + it.sub + '</div></div>';
         }).join("");
+      }
+
+      function divCell(code) {
+        var d = DIVIDENDS[code];
+        if (!d || !d.cash) return "—";
+        return fmt(d.cash) + '<span class="daychg flat">除息 ' + d.exDate.replace(/-/g, "/") + "</span>";
       }
 
       function renderSummary() {
@@ -456,6 +475,7 @@
             '<td data-label="市值" class="mono">' + fmt(mv) + "</td>" +
             '<td data-label="損益" class="mono"><span class="pill ' + cls(pnl) + '">' + fmtSigned(pnl) + "</span></td>" +
             '<td data-label="報酬率" class="mono ' + cls(pnl) + '">' + fmtPct(pnl / p.cost, true) + "</td>" +
+            '<td data-label="股息收入" class="mono">' + divCell(code) + "</td>" +
             '<td data-label="成本佔比"><span class="weightbar"><span class="track"><span class="fill" style="width:' + w.toFixed(1) + '%"></span></span><span class="mono">' + w.toFixed(1) + "%</span></span></td>" +
             "</tr>";
         }).join("");
@@ -466,7 +486,8 @@
           '<td class="mono">' + fmt(t.cost) + "</td><td></td>" +
           '<td class="mono">' + fmt(t.mv) + "</td>" +
           '<td class="mono ' + cls(t.pnl) + '">' + fmtSigned(t.pnl) + "</td>" +
-          '<td class="mono ' + cls(t.pnl) + '">' + fmtPct(t.pnl / t.cost, true) + "</td><td></td></tr>";
+          '<td class="mono ' + cls(t.pnl) + '">' + fmtPct(t.pnl / t.cost, true) + "</td>" +
+          '<td class="mono">' + fmt(TOTAL_CASH_DIV) + "</td><td></td></tr>";
       }
 
       function renderLots() {
